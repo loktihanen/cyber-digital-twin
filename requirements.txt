@@ -1,1 +1,16 @@
+py2neo
+rdflib
+fuzzywuzzy[speedup]
+sentence-transformers
+pykeen
+torch
+dgl
+scikit-learn
+matplotlib
+networkx
+pyvis
+streamlit
+tqdm
+pandas
+numpy
 
