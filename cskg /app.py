@@ -535,7 +535,6 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
     st.header("🧪 Simulation de Risque & Propagation")
     st.info("Ce module simule les impacts potentiels des vulnérabilités actives sur les services critiques, à partir des relations CVE → Hôte → Service.")
 
-    # ======================== 📥 Extraction des données ========================
     query = """
     MATCH (h:Host)-[:IS_VULNERABLE_TO]->(c:CVE)
     OPTIONAL MATCH (h)-[:RUNS_SERVICE]->(s:Service)
@@ -548,21 +547,12 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         st.warning("Aucune relation vulnérabilité ↔ hôte ↔ service trouvée.")
         st.stop()
 
-    # ======================== 🎯 Analyse du niveau de risque ========================
     df["cvss"] = pd.to_numeric(df["cvss"], errors="coerce")
-    df["risk_level"] = pd.cut(
-        df["cvss"],
-        bins=[0, 4, 7, 10],
-        labels=["Faible", "Moyen", "Critique"]
-    )
+    df["risk_level"] = pd.cut(df["cvss"], bins=[0, 4, 7, 10], labels=["Faible", "Moyen", "Critique"])
 
-    # ======================== 🌐 Construction du graphe de simulation ========================
     G = nx.DiGraph()
     for _, row in df.iterrows():
-        cve = row["cve"]
-        host = row["host"]
-        service = row["service"]
-        risk = row["risk_level"]
+        cve, host, service = row["cve"], row["host"], row["service"]
 
         if cve and host:
             G.add_node(cve, label=cve, type="CVE", color="#ff4d4d")
@@ -573,26 +563,26 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
             G.add_node(service, label=service, type="Service", color="#ffaa00")
             G.add_edge(host, service, label="IMPACTS")
 
-    # ======================== 💡 Visualisation interactive ========================
-    net = Network(height="700px", width="100%", bgcolor="#1e1e1e", font_color="white")
-    for node, data in G.nodes(data=True):
-        net.add_node(node, label=data["label"], color=data.get("color", "gray"))
-    for src, tgt, data in G.edges(data=True):
-        net.add_edge(src, tgt, label=data.get("label", ""))
+    if len(G.nodes()) == 0:
+        st.warning("Aucune donnée exploitable pour la simulation.")
+    else:
+        net = Network(height="700px", width="100%", bgcolor="#1e1e1e", font_color="white")
+        for node, data in G.nodes(data=True):
+            net.add_node(node, label=data["label"], color=data.get("color", "gray"))
+        for src, tgt, data in G.edges(data=True):
+            net.add_edge(src, tgt, label=data.get("label", ""))
 
-    path = "/tmp/simulation_risque.html"
-    net.save_graph(path)
-    with open(path, 'r', encoding='utf-8') as f:
-        html = f.read()
-    st.components.v1.html(html, height=700, scrolling=True)
+        path = "/tmp/simulation_risque.html"
+        net.save_graph(path)
+        with open(path, 'r', encoding='utf-8') as f:
+            html = f.read()
+        st.components.v1.html(html, height=700, scrolling=True)
 
-    # ======================== 📊 Résultats tabulaires ========================
-    st.markdown("### 📄 Tableau des scénarios de risque")
-    st.dataframe(
-        df.dropna().sort_values("cvss", ascending=False),
-        use_container_width=True
-    )
-
+        st.markdown("### 📄 Tableau des scénarios de risque")
+        st.dataframe(
+            df.dropna().sort_values("cvss", ascending=False),
+            use_container_width=True
+        )
 
 # ======================== 🧠 INFOS DE FIN ========================
 st.sidebar.markdown("---")
