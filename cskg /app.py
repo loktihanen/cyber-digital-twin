@@ -528,93 +528,70 @@ elif menu_choice == "🔀 CSKG3 – Fusion NVD + Nessus":
    # plt.gca().invert_yaxis()
    # st.pyplot(plt.gcf())
 elif menu_choice == "🧪 Simulation & Digital Twin":
-    st.header("🧪 Simulation avec le Jumeau Numérique")
-    st.info("Ce module permet de simuler des scénarios cyber à l'aide du graphe fusionné enrichi CVE_UNIFIED et des hôtes réels.")
+    import pandas as pd
+    import networkx as nx
+    from pyvis.network import Network
 
-    # Connexion à Neo4j (si pas déjà fait en dehors)
-    @st.cache_resource
-    def connect_neo4j():
-        from py2neo import Graph
-        uri = "neo4j+s://8d5fbce8.databases.neo4j.io"
-        user = "neo4j"
-        password = "VpzGP3RDVB7AtQ1vfrQljYUgxw4VBzy0tUItWeRB9CM"
-        graph = Graph(uri, auth=(user, password))
-        graph.run("RETURN 1").evaluate()
-        return graph
+    st.header("🧪 Simulation de Risque & Propagation")
+    st.info("Ce module simule les impacts potentiels des vulnérabilités actives sur les services critiques, à partir des relations CVE → Hôte → Service.")
 
-    graph_db = connect_neo4j()
-
-    # Chargement des données multi-niveaux
-    @st.cache_data
-    def load_multilevel_graph():
-        query = """
-        MATCH (c:CVE_UNIFIED)-[:DETECTED_BY]->(p:Plugin)-[:IS_ON]->(h:Host)-[r:IMPACTS]->(s:Service)
-        RETURN c.name AS cve, p.name AS plugin, h.name AS host, s.name AS service, r.weight AS weight
-        """
-        return graph_db.run(query).to_data_frame()
-
-    df = load_multilevel_graph()
+    # ======================== 📥 Extraction des données ========================
+    query = """
+    MATCH (h:Host)-[:IS_VULNERABLE_TO]->(c:CVE)
+    OPTIONAL MATCH (h)-[:RUNS_SERVICE]->(s:Service)
+    RETURN h.name AS host, c.name AS cve, c.cvss_score AS cvss, s.name AS service
+    LIMIT 500
+    """
+    df = graph_db.run(query).to_data_frame()
 
     if df.empty:
-        st.warning("❌ Aucune donnée de propagation multi-niveaux trouvée.")
+        st.warning("Aucune relation vulnérabilité ↔ hôte ↔ service trouvée.")
         st.stop()
 
-    # Construction du graphe orienté
-    import networkx as nx
-    import numpy as np
-    import matplotlib.pyplot as plt
-    import tempfile
-    from pyvis.network import Network
-    import streamlit.components.v1 as components
+    # ======================== 🎯 Analyse du niveau de risque ========================
+    df["cvss"] = pd.to_numeric(df["cvss"], errors="coerce")
+    df["risk_level"] = pd.cut(
+        df["cvss"],
+        bins=[0, 4, 7, 10],
+        labels=["Faible", "Moyen", "Critique"]
+    )
 
+    # ======================== 🌐 Construction du graphe de simulation ========================
     G = nx.DiGraph()
     for _, row in df.iterrows():
         cve = row["cve"]
-        plugin = row["plugin"]
         host = row["host"]
         service = row["service"]
-        weight = row.get("weight", 1.0)
+        risk = row["risk_level"]
 
-        if all(pd.notna([cve, plugin, host, service])):
-            G.add_edge(cve, plugin, weight=1.0)
-            G.add_edge(plugin, host, weight=1.0)
-            G.add_edge(host, service, weight=weight)
+        if cve and host:
+            G.add_node(cve, label=cve, type="CVE", color="#ff4d4d")
+            G.add_node(host, label=host, type="Host", color="#00cc66")
+            G.add_edge(cve, host, label="EXPLOITS")
 
-    st.subheader("🌐 Vue du graphe multi-niveaux (CVE → Plugin → Host → Service)")
+        if host and service:
+            G.add_node(service, label=service, type="Service", color="#ffaa00")
+            G.add_edge(host, service, label="IMPACTS")
 
-    if G.number_of_nodes() == 0:
-        st.warning("Le graphe est vide, impossible d'afficher la visualisation.")
-    else:
-        try:
-            pos = nx.spring_layout(G, seed=42)
+    # ======================== 💡 Visualisation interactive ========================
+    net = Network(height="700px", width="100%", bgcolor="#1e1e1e", font_color="white")
+    for node, data in G.nodes(data=True):
+        net.add_node(node, label=data["label"], color=data.get("color", "gray"))
+    for src, tgt, data in G.edges(data=True):
+        net.add_edge(src, tgt, label=data.get("label", ""))
 
-            # Ne garder que les nœuds avec positions valides (finies)
-            valid_nodes = [n for n in G.nodes if n in pos and all(np.isfinite(pos[n]))]
-            G_valid = G.subgraph(valid_nodes)
-            pos_valid = {n: pos[n] for n in valid_nodes}
+    path = "/tmp/simulation_risque.html"
+    net.save_graph(path)
+    with open(path, 'r', encoding='utf-8') as f:
+        html = f.read()
+    st.components.v1.html(html, height=700, scrolling=True)
 
-            plt.figure(figsize=(12, 8))
-            nx.draw(G_valid, pos_valid, with_labels=True,
-                    node_color='lightblue', edge_color='gray',
-                    node_size=1500, font_size=9, arrows=True)
-            st.pyplot(plt.gcf())
-            plt.clf()
-
-        except Exception as e:
-            st.error(f"Erreur matplotlib lors du dessin : {e}")
-            st.info("Affichage alternatif via PyVis")
-
-            net = Network(height="600px", width="100%", directed=True)
-            for node in G.nodes():
-                net.add_node(node, label=node)
-            for src, tgt, data in G.edges(data=True):
-                net.add_edge(src, tgt, value=data.get("weight", 1.0))
-
-            tmp_path = tempfile.NamedTemporaryFile(suffix=".html", delete=False).name
-            net.show(tmp_path)
-            with open(tmp_path, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-            components.html(html_content, height=650)
+    # ======================== 📊 Résultats tabulaires ========================
+    st.markdown("### 📄 Tableau des scénarios de risque")
+    st.dataframe(
+        df.dropna().sort_values("cvss", ascending=False),
+        use_container_width=True
+    )
 
 
 # ======================== 🧠 INFOS DE FIN ========================
