@@ -536,7 +536,9 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
     import networkx as nx
     import matplotlib.pyplot as plt
     import matplotlib.animation as animation
-    import io
+    import tempfile
+    import streamlit.components.v1 as components
+    from pyvis.network import Network
 
     # ======================== 1. EXTRACTION DU GRAPHE MULTI-NIVEAUX ========================
     @st.cache_data
@@ -567,7 +569,36 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
             G.add_edge(plugin, host, weight=1.0)
             G.add_edge(host, service, weight=weight)
 
-    # ======================== 3. CHOIX DE LA CVE DE DÉPART ========================
+    # ======================== 3. AFFICHAGE DU GRAPHE ========================
+    st.subheader("🌐 Vue du graphe multi-niveaux (CVE → Plugin → Host → Service)")
+
+    if G.number_of_nodes() == 0:
+        st.warning("Le graphe est vide, impossible d'afficher la visualisation.")
+    else:
+        try:
+            pos = nx.spring_layout(G, seed=42)  # Fixe la disposition pour stabilité
+            plt.figure(figsize=(12, 8))
+            nx.draw(G, pos, with_labels=True, node_color='lightblue', edge_color='gray',
+                    node_size=800, font_size=8, arrowsize=15)
+            st.pyplot(plt.gcf())
+            plt.clf()
+        except Exception as e:
+            st.error(f"Erreur lors du dessin du graphe avec matplotlib: {e}")
+            st.info("Essaye la visualisation interactive ci-dessous.")
+
+            # Fallback pyvis interactive
+            net = Network(height="600px", width="100%", directed=True)
+            for node in G.nodes():
+                net.add_node(node, label=node)
+            for source, target, data in G.edges(data=True):
+                net.add_edge(source, target, value=data.get("weight", 1.0))
+            tmp_path = tempfile.NamedTemporaryFile(suffix=".html", delete=False).name
+            net.show(tmp_path)
+            with open(tmp_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            components.html(html_content, height=650)
+
+    # ======================== 4. CHOIX DE LA CVE DE DÉPART ========================
     st.subheader("🧪 Simulation What-If depuis une CVE")
     valid_cves = sorted({n for n in G.nodes if n.startswith("CVE")})
     if not valid_cves:
@@ -578,15 +609,13 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
     max_steps = st.slider("Nombre d'étapes de propagation", 1, 5, 3)
     decay = st.slider("Facteur de dissipation", 0.1, 1.0, 0.7)
 
-    # ======================== 4. MODÈLE DE COÛT ========================
-    # Coût unitaire par type de noeud
+    # ======================== 5. MODÈLE DE COÛT ========================
     COSTS = {
         'CVE_UNIFIED': 1000,
         'Plugin': 500,
         'Host': 2000,
         'Service': 3000,
     }
-    # Fonction pour récupérer le type d'un noeud via son préfixe (ex: "CVE-2023..." -> 'CVE_UNIFIED')
     def get_node_type(node):
         if node.startswith("CVE"):
             return 'CVE_UNIFIED'
@@ -599,7 +628,7 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         else:
             return 'Unknown'
 
-    # ======================== 5. SIMULATION PROPAGATION AVANT ========================
+    # ======================== 6. SIMULATION PROPAGATION AVANT ========================
     def simulate_forward(G, start, decay, steps):
         scores_per_step = []
         scores = {start: 1.0}
@@ -615,12 +644,10 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
                         scores[neighbor] = propagated
                         next_frontier.append(neighbor)
             frontier = next_frontier
-            # Copier l'état des scores à cette étape
             scores_per_step.append(scores.copy())
         return scores_per_step
 
-    # ======================== 6. SIMULATION PROPAGATION ARRIÈRE ========================
-    # On remonte dans le graphe: Service -> Host -> Plugin -> CVE
+    # ======================== 7. SIMULATION PROPAGATION ARRIÈRE ========================
     def simulate_backward(G, start, decay, steps):
         scores_per_step = []
         scores = {start: 1.0}
@@ -639,7 +666,7 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
             scores_per_step.append(scores.copy())
         return scores_per_step
 
-    # ======================== 7. BOUTONS ========================
+    # ======================== 8. BOUTONS ========================
     col1, col2, col3 = st.columns([1, 1, 1])
     launch_forward = col1.button("🚀 Lancer simulation propagation avant")
     launch_backward = col2.button("🔙 Lancer simulation propagation arrière")
@@ -648,19 +675,18 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
     if refresh:
         st.experimental_rerun()
 
+    # ====== 9. Résultats simulation avant ======
     if launch_forward:
         st.subheader("➡️ Résultats de la simulation - Propagation avant (CVE → Service)")
         results_steps = simulate_forward(G, selected_cve, decay, max_steps)
         final_scores = results_steps[-1]
 
-        # Calcul coût total
         total_cost = 0
         for node, score in final_scores.items():
             node_type = get_node_type(node)
             cost = COSTS.get(node_type, 0)
             total_cost += score * cost
 
-        # Affichage résultats finaux
         df_res = pd.DataFrame(list(final_scores.items()), columns=["Noeud", "Score de propagation"])
         df_res["Type"] = df_res["Noeud"].apply(get_node_type)
         df_res = df_res.sort_values("Score de propagation", ascending=False)
@@ -669,7 +695,6 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         st.metric("📛 Risque cumulé estimé (score)", f"{sum(final_scores.values()):.2f}")
         st.metric("💰 Coût estimé total (arbitraire)", f"{total_cost:.2f} unités")
 
-        # Graphique top10
         top10 = df_res.head(10)
         plt.figure(figsize=(10, 5))
         plt.barh(top10["Noeud"][::-1], top10["Score de propagation"][::-1], color='darkred')
@@ -677,8 +702,8 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         plt.title(f"Impact à partir de la CVE {selected_cve} (Propagation avant)")
         plt.gca().invert_yaxis()
         st.pyplot(plt.gcf())
+        plt.clf()
 
-        # Animation temporelle (scores par étape)
         st.subheader("📈 Évolution temporelle du score de propagation")
         fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -694,15 +719,11 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
             ax.invert_yaxis()
 
         ani = animation.FuncAnimation(fig, animate, frames=len(results_steps), interval=1000, repeat=False)
-
-        # Pour afficher animation dans Streamlit, on convertit en gif ou mp4
-        import tempfile
         tmpfile = tempfile.NamedTemporaryFile(suffix='.gif', delete=False)
         ani.save(tmpfile.name, writer='pillow')
         st.image(tmpfile.name)
         tmpfile.close()
 
-        # Export CSV final
         st.download_button(
             label="⬇️ Télécharger résultats finaux (.csv)",
             data=df_res.to_csv(index=False),
@@ -710,12 +731,12 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
             mime="text/csv"
         )
 
+    # ====== 10. Résultats simulation arrière ======
     if launch_backward:
         st.subheader("⬅️ Résultats de la simulation - Propagation arrière (Service → CVE)")
         results_steps = simulate_backward(G, selected_cve, decay, max_steps)
         final_scores = results_steps[-1]
 
-        # Calcul coût total
         total_cost = 0
         for node, score in final_scores.items():
             node_type = get_node_type(node)
@@ -737,8 +758,8 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         plt.title(f"Impact à partir du Service {selected_cve} (Propagation arrière)")
         plt.gca().invert_yaxis()
         st.pyplot(plt.gcf())
+        plt.clf()
 
-        # Animation temporelle (scores par étape)
         st.subheader("📈 Évolution temporelle du score de propagation")
         fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -754,7 +775,6 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
             ax.invert_yaxis()
 
         ani = animation.FuncAnimation(fig, animate, frames=len(results_steps), interval=1000, repeat=False)
-
         tmpfile = tempfile.NamedTemporaryFile(suffix='.gif', delete=False)
         ani.save(tmpfile.name, writer='pillow')
         st.image(tmpfile.name)
