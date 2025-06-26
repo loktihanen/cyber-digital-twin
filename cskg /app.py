@@ -530,106 +530,243 @@ elif menu_choice == "🔀 CSKG3 – Fusion NVD + Nessus":
 
 elif menu_choice == "🧪 Simulation & Digital Twin":
     st.header("🧪 Simulation avec le Jumeau Numérique")
-    st.info("Ce module permet de simuler des scénarios cyber à l'aide du graphe fusionné enrichi CVE_UNIFIED et des hôtes réels.")
-
+    st.info("Ce module permet de simuler des scénarios cyber en partant d'une CVE, avec propagation sur les plugins, hôtes, et services affectés.")
+    
+    import pandas as pd
     import networkx as nx
     import matplotlib.pyplot as plt
-    import pandas as pd
+    import matplotlib.animation as animation
+    import io
 
-    # ======================== 1. EXTRACTION DU GRAPHE FUSIONNÉ ========================
+    # ======================== 1. EXTRACTION DU GRAPHE MULTI-NIVEAUX ========================
     @st.cache_data
-    def load_simulation_graph():
+    def load_multilevel_graph():
         query = """
-        MATCH (h:Host)-[r:IMPACTS]->(s:Service)
-        RETURN h.name AS host, s.name AS service, r.weight AS weight
+        MATCH (c:CVE_UNIFIED)-[:DETECTED_BY]->(p:Plugin)-[:IS_ON]->(h:Host)-[r:IMPACTS]->(s:Service)
+        RETURN c.name AS cve, p.name AS plugin, h.name AS host, s.name AS service, r.weight AS weight
         """
         return graph_db.run(query).to_data_frame()
 
-    df = load_simulation_graph()
+    df = load_multilevel_graph()
 
     if df.empty:
-        st.warning("Aucune relation IMPACTS détectée. Lance d'abord la fusion et la propagation.")
+        st.warning("❌ Aucune donnée de propagation multi-niveaux trouvée. Lance d'abord les étapes d'enrichissement.")
         st.stop()
 
     # ======================== 2. CONSTRUCTION DU GRAPHE ========================
     G = nx.DiGraph()
     for _, row in df.iterrows():
+        cve = row["cve"]
+        plugin = row["plugin"]
         host = row["host"]
         service = row["service"]
         weight = row.get("weight", 1.0)
-        if pd.notna(host) and pd.notna(service):
+
+        if all(pd.notna([cve, plugin, host, service])):
+            G.add_edge(cve, plugin, weight=1.0)
+            G.add_edge(plugin, host, weight=1.0)
             G.add_edge(host, service, weight=weight)
 
-    st.markdown("### 🌐 Vue du graphe Host → Service")
-    if G.number_of_nodes() == 0 or G.number_of_edges() == 0:
-        st.warning("⚠️ Le graphe ne contient aucun nœud ou arête valide pour être affiché.")
-    else:
-        try:
-            pos = nx.spring_layout(G, seed=42)
-            plt.figure(figsize=(10, 6))
-            nx.draw(
-                G, pos, with_labels=True,
-                node_color='lightblue', edge_color='gray',
-                node_size=1500, font_size=9, arrows=True
-            )
-            edge_labels = nx.get_edge_attributes(G, 'weight')
-            nx.draw_networkx_edge_labels(
-                G, pos,
-                edge_labels={k: f"{v:.2f}" for k, v in edge_labels.items()},
-                font_color='red'
-            )
-            st.pyplot(plt.gcf())
-        except Exception as e:
-            st.error("❌ Erreur lors de la visualisation du graphe.")
-            st.exception(e)
-
-    # ======================== 3. SCÉNARIO DE SIMULATION ========================
-    st.subheader("🧪 Simulation What-If")
-    valid_hosts = [n for n in G.nodes if any(G.successors(n))]
-    if not valid_hosts:
-        st.warning("Aucun hôte valide pour la simulation.")
+    # ======================== 3. CHOIX DE LA CVE DE DÉPART ========================
+    st.subheader("🧪 Simulation What-If depuis une CVE")
+    valid_cves = sorted({n for n in G.nodes if n.startswith("CVE")})
+    if not valid_cves:
+        st.warning("⚠️ Aucun nœud CVE détecté.")
         st.stop()
 
-    selected_host = st.selectbox("Choisir un hôte à simuler", valid_hosts)
-    max_steps = st.slider("Nombre d'étapes de propagation", 1, 5, 2)
-    decay = st.slider("Facteur de dissipation", 0.1, 1.0, 0.6)
+    selected_cve = st.selectbox("🔍 Choisir une CVE de départ", valid_cves)
+    max_steps = st.slider("Nombre d'étapes de propagation", 1, 5, 3)
+    decay = st.slider("Facteur de dissipation", 0.1, 1.0, 0.7)
 
-    def simulate_propagation(G, start_node, decay, max_steps):
-        scores = {start_node: 1.0}
-        frontier = [start_node]
-        for _ in range(max_steps):
+    # ======================== 4. MODÈLE DE COÛT ========================
+    # Coût unitaire par type de noeud
+    COSTS = {
+        'CVE_UNIFIED': 1000,
+        'Plugin': 500,
+        'Host': 2000,
+        'Service': 3000,
+    }
+    # Fonction pour récupérer le type d'un noeud via son préfixe (ex: "CVE-2023..." -> 'CVE_UNIFIED')
+    def get_node_type(node):
+        if node.startswith("CVE"):
+            return 'CVE_UNIFIED'
+        elif node.startswith("Plugin"):
+            return 'Plugin'
+        elif node.startswith("Host"):
+            return 'Host'
+        elif node.startswith("Service"):
+            return 'Service'
+        else:
+            return 'Unknown'
+
+    # ======================== 5. SIMULATION PROPAGATION AVANT ========================
+    def simulate_forward(G, start, decay, steps):
+        scores_per_step = []
+        scores = {start: 1.0}
+        frontier = [start]
+
+        for step in range(steps):
             next_frontier = []
             for node in frontier:
                 for neighbor in G.successors(node):
-                    edge_weight = G[node][neighbor].get('weight', 1.0)
-                    propagated_score = scores[node] * decay * edge_weight
-                    if propagated_score > scores.get(neighbor, 0):
-                        scores[neighbor] = propagated_score
+                    edge_w = G[node][neighbor].get("weight", 1.0)
+                    propagated = scores[node] * decay * edge_w
+                    if propagated > scores.get(neighbor, 0):
+                        scores[neighbor] = propagated
                         next_frontier.append(neighbor)
             frontier = next_frontier
-        return dict(sorted(scores.items(), key=lambda x: x[1], reverse=True))
+            # Copier l'état des scores à cette étape
+            scores_per_step.append(scores.copy())
+        return scores_per_step
 
-    if st.button("🚀 Lancer la simulation"):
-        results = simulate_propagation(G, selected_host, decay, max_steps)
+    # ======================== 6. SIMULATION PROPAGATION ARRIÈRE ========================
+    # On remonte dans le graphe: Service -> Host -> Plugin -> CVE
+    def simulate_backward(G, start, decay, steps):
+        scores_per_step = []
+        scores = {start: 1.0}
+        frontier = [start]
 
-        # ======================== 4. AFFICHAGE DES RÉSULTATS ========================
-        st.markdown("### 📊 Résultats de la simulation")
-        df_results = pd.DataFrame(list(results.items()), columns=["Noeud", "Score de propagation"])
-        st.dataframe(df_results)
+        for step in range(steps):
+            next_frontier = []
+            for node in frontier:
+                for neighbor in G.predecessors(node):
+                    edge_w = G[neighbor][node].get("weight", 1.0)
+                    propagated = scores[node] * decay * edge_w
+                    if propagated > scores.get(neighbor, 0):
+                        scores[neighbor] = propagated
+                        next_frontier.append(neighbor)
+            frontier = next_frontier
+            scores_per_step.append(scores.copy())
+        return scores_per_step
 
-        # ======================== 5. ANALYSE DE RISQUE ========================
-        st.subheader("🧯 Analyse du risque cumulé (pondéré)")
-        total_risk = sum(results.values())
-        st.metric("📛 Risque total estimé", f"{total_risk:.2f}")
+    # ======================== 7. BOUTONS ========================
+    col1, col2, col3 = st.columns([1, 1, 1])
+    launch_forward = col1.button("🚀 Lancer simulation propagation avant")
+    launch_backward = col2.button("🔙 Lancer simulation propagation arrière")
+    refresh = col3.button("🔄 Rafraîchir")
 
-        # Graphique des 10 entités les plus impactées
-        top_targets = list(results.keys())[:10]
+    if refresh:
+        st.experimental_rerun()
+
+    if launch_forward:
+        st.subheader("➡️ Résultats de la simulation - Propagation avant (CVE → Service)")
+        results_steps = simulate_forward(G, selected_cve, decay, max_steps)
+        final_scores = results_steps[-1]
+
+        # Calcul coût total
+        total_cost = 0
+        for node, score in final_scores.items():
+            node_type = get_node_type(node)
+            cost = COSTS.get(node_type, 0)
+            total_cost += score * cost
+
+        # Affichage résultats finaux
+        df_res = pd.DataFrame(list(final_scores.items()), columns=["Noeud", "Score de propagation"])
+        df_res["Type"] = df_res["Noeud"].apply(get_node_type)
+        df_res = df_res.sort_values("Score de propagation", ascending=False)
+        st.dataframe(df_res)
+
+        st.metric("📛 Risque cumulé estimé (score)", f"{sum(final_scores.values()):.2f}")
+        st.metric("💰 Coût estimé total (arbitraire)", f"{total_cost:.2f} unités")
+
+        # Graphique top10
+        top10 = df_res.head(10)
         plt.figure(figsize=(10, 5))
-        plt.barh(top_targets[::-1], [results[n] for n in top_targets[::-1]], color='crimson')
-        plt.xlabel("Score pondéré (propagation * poids)")
-        plt.title(f"Top 10 entités impactées depuis {selected_host}")
+        plt.barh(top10["Noeud"][::-1], top10["Score de propagation"][::-1], color='darkred')
+        plt.xlabel("Score pondéré (dissipation * poids)")
+        plt.title(f"Impact à partir de la CVE {selected_cve} (Propagation avant)")
         plt.gca().invert_yaxis()
         st.pyplot(plt.gcf())
+
+        # Animation temporelle (scores par étape)
+        st.subheader("📈 Évolution temporelle du score de propagation")
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        def animate(i):
+            ax.clear()
+            step_scores = results_steps[i]
+            sorted_nodes = sorted(step_scores.items(), key=lambda x: x[1], reverse=True)[:10]
+            nodes = [x[0] for x in sorted_nodes]
+            scores = [x[1] for x in sorted_nodes]
+            ax.barh(nodes[::-1], scores[::-1], color='darkred')
+            ax.set_xlabel("Score pondéré")
+            ax.set_title(f"Étape {i+1} / {max_steps}")
+            ax.invert_yaxis()
+
+        ani = animation.FuncAnimation(fig, animate, frames=len(results_steps), interval=1000, repeat=False)
+
+        # Pour afficher animation dans Streamlit, on convertit en gif ou mp4
+        import tempfile
+        tmpfile = tempfile.NamedTemporaryFile(suffix='.gif', delete=False)
+        ani.save(tmpfile.name, writer='pillow')
+        st.image(tmpfile.name)
+        tmpfile.close()
+
+        # Export CSV final
+        st.download_button(
+            label="⬇️ Télécharger résultats finaux (.csv)",
+            data=df_res.to_csv(index=False),
+            file_name=f"propagation_risque_avant_{selected_cve}.csv",
+            mime="text/csv"
+        )
+
+    if launch_backward:
+        st.subheader("⬅️ Résultats de la simulation - Propagation arrière (Service → CVE)")
+        results_steps = simulate_backward(G, selected_cve, decay, max_steps)
+        final_scores = results_steps[-1]
+
+        # Calcul coût total
+        total_cost = 0
+        for node, score in final_scores.items():
+            node_type = get_node_type(node)
+            cost = COSTS.get(node_type, 0)
+            total_cost += score * cost
+
+        df_res = pd.DataFrame(list(final_scores.items()), columns=["Noeud", "Score de propagation"])
+        df_res["Type"] = df_res["Noeud"].apply(get_node_type)
+        df_res = df_res.sort_values("Score de propagation", ascending=False)
+        st.dataframe(df_res)
+
+        st.metric("📛 Risque cumulé estimé (score)", f"{sum(final_scores.values()):.2f}")
+        st.metric("💰 Coût estimé total (arbitraire)", f"{total_cost:.2f} unités")
+
+        top10 = df_res.head(10)
+        plt.figure(figsize=(10, 5))
+        plt.barh(top10["Noeud"][::-1], top10["Score de propagation"][::-1], color='darkblue')
+        plt.xlabel("Score pondéré (dissipation * poids)")
+        plt.title(f"Impact à partir du Service {selected_cve} (Propagation arrière)")
+        plt.gca().invert_yaxis()
+        st.pyplot(plt.gcf())
+
+        # Animation temporelle (scores par étape)
+        st.subheader("📈 Évolution temporelle du score de propagation")
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        def animate(i):
+            ax.clear()
+            step_scores = results_steps[i]
+            sorted_nodes = sorted(step_scores.items(), key=lambda x: x[1], reverse=True)[:10]
+            nodes = [x[0] for x in sorted_nodes]
+            scores = [x[1] for x in sorted_nodes]
+            ax.barh(nodes[::-1], scores[::-1], color='darkblue')
+            ax.set_xlabel("Score pondéré")
+            ax.set_title(f"Étape {i+1} / {max_steps}")
+            ax.invert_yaxis()
+
+        ani = animation.FuncAnimation(fig, animate, frames=len(results_steps), interval=1000, repeat=False)
+
+        tmpfile = tempfile.NamedTemporaryFile(suffix='.gif', delete=False)
+        ani.save(tmpfile.name, writer='pillow')
+        st.image(tmpfile.name)
+        tmpfile.close()
+
+        st.download_button(
+            label="⬇️ Télécharger résultats finaux (.csv)",
+            data=df_res.to_csv(index=False),
+            file_name=f"propagation_risque_arriere_{selected_cve}.csv",
+            mime="text/csv"
+        )
+
 
 
 # ======================== 🧠 INFOS DE FIN ========================
