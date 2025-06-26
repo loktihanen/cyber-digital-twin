@@ -43,8 +43,9 @@ jobs:
 
       - name: ⚙️ Exécuter KG1 (NVD)
         run: |
-          cd $GITHUB_WORKSPACE
+          cd $GITHUB_WORKSPACE/cyber-digital-twin
           python cskg/collect_nvd.py
+
 
       - name: ⚙️ Exécuter KG2 (Nessus)
         run: |
