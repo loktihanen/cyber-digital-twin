@@ -557,19 +557,40 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         host = row["host"]
         service = row["service"]
         weight = row.get("weight", 1.0)
-        G.add_edge(host, service, weight=weight)
+        if pd.notna(host) and pd.notna(service):
+            G.add_edge(host, service, weight=weight)
 
     st.markdown("### 🌐 Vue du graphe Host → Service")
-    pos = nx.spring_layout(G, seed=42)
-    plt.figure(figsize=(10, 6))
-    nx.draw(G, pos, with_labels=True, node_color='lightblue', edge_color='gray', node_size=1500, font_size=9)
-    edge_labels = nx.get_edge_attributes(G, 'weight')
-    nx.draw_networkx_edge_labels(G, pos, edge_labels={k: f"{v:.2f}" for k, v in edge_labels.items()}, font_color='red')
-    st.pyplot(plt.gcf())
+    if G.number_of_nodes() == 0 or G.number_of_edges() == 0:
+        st.warning("⚠️ Le graphe ne contient aucun nœud ou arête valide pour être affiché.")
+    else:
+        try:
+            pos = nx.spring_layout(G, seed=42)
+            plt.figure(figsize=(10, 6))
+            nx.draw(
+                G, pos, with_labels=True,
+                node_color='lightblue', edge_color='gray',
+                node_size=1500, font_size=9, arrows=True
+            )
+            edge_labels = nx.get_edge_attributes(G, 'weight')
+            nx.draw_networkx_edge_labels(
+                G, pos,
+                edge_labels={k: f"{v:.2f}" for k, v in edge_labels.items()},
+                font_color='red'
+            )
+            st.pyplot(plt.gcf())
+        except Exception as e:
+            st.error("❌ Erreur lors de la visualisation du graphe.")
+            st.exception(e)
 
     # ======================== 3. SCÉNARIO DE SIMULATION ========================
     st.subheader("🧪 Simulation What-If")
-    selected_host = st.selectbox("Choisir un hôte à simuler", list(G.nodes))
+    valid_hosts = [n for n in G.nodes if any(G.successors(n))]
+    if not valid_hosts:
+        st.warning("Aucun hôte valide pour la simulation.")
+        st.stop()
+
+    selected_host = st.selectbox("Choisir un hôte à simuler", valid_hosts)
     max_steps = st.slider("Nombre d'étapes de propagation", 1, 5, 2)
     decay = st.slider("Facteur de dissipation", 0.1, 1.0, 0.6)
 
@@ -591,23 +612,25 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
     if st.button("🚀 Lancer la simulation"):
         results = simulate_propagation(G, selected_host, decay, max_steps)
 
+        # ======================== 4. AFFICHAGE DES RÉSULTATS ========================
         st.markdown("### 📊 Résultats de la simulation")
         df_results = pd.DataFrame(list(results.items()), columns=["Noeud", "Score de propagation"])
         st.dataframe(df_results)
 
-        # ======================== 4. ANALYSE DE RISQUE ========================
+        # ======================== 5. ANALYSE DE RISQUE ========================
         st.subheader("🧯 Analyse du risque cumulé (pondéré)")
         total_risk = sum(results.values())
         st.metric("📛 Risque total estimé", f"{total_risk:.2f}")
 
-        # Bar chart
+        # Graphique des 10 entités les plus impactées
         top_targets = list(results.keys())[:10]
         plt.figure(figsize=(10, 5))
         plt.barh(top_targets[::-1], [results[n] for n in top_targets[::-1]], color='crimson')
-        plt.xlabel("Score pondéré (propagation * CVSS)")
+        plt.xlabel("Score pondéré (propagation * poids)")
         plt.title(f"Top 10 entités impactées depuis {selected_host}")
         plt.gca().invert_yaxis()
         st.pyplot(plt.gcf())
+
 
 # ======================== 🧠 INFOS DE FIN ========================
 st.sidebar.markdown("---")
