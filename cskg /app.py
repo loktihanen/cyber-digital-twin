@@ -331,7 +331,6 @@ elif menu_choice == "🔀 CSKG3 – Fusion NVD + Nessus":
     else:
         st.warning("⚠️ Le fichier `kg_fusionne.ttl` est introuvable. Exécute `rdf_export.py` ou `propagate_impacts.py`.")
 
-
     
 #elif menu_choice == "📈 R-GCN & Relation Prediction":
    # st.header("🧠 R-GCN – Raisonnement sur le graphe de vulnérabilités")
