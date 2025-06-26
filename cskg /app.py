@@ -528,19 +528,10 @@ elif menu_choice == "🔀 CSKG3 – Fusion NVD + Nessus":
    # plt.gca().invert_yaxis()
    # st.pyplot(plt.gcf())
 elif menu_choice == "🧪 Simulation & Digital Twin":
-    import streamlit as st
-    import pandas as pd
-    import numpy as np
-    import networkx as nx
-    import matplotlib.pyplot as plt
-    import tempfile
-    from pyvis.network import Network
-    import streamlit.components.v1 as components
-
     st.header("🧪 Simulation avec le Jumeau Numérique")
     st.info("Ce module permet de simuler des scénarios cyber à l'aide du graphe fusionné enrichi CVE_UNIFIED et des hôtes réels.")
 
-    # Connexion à Neo4j
+    # Connexion à Neo4j (si pas déjà fait en dehors)
     @st.cache_resource
     def connect_neo4j():
         from py2neo import Graph
@@ -549,7 +540,6 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         password = "VpzGP3RDVB7AtQ1vfrQljYUgxw4VBzy0tUItWeRB9CM"
         graph = Graph(uri, auth=(user, password))
         graph.run("RETURN 1").evaluate()
-        st.success("✅ Connexion Neo4j Aura réussie")
         return graph
 
     graph_db = connect_neo4j()
@@ -569,7 +559,14 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         st.warning("❌ Aucune donnée de propagation multi-niveaux trouvée.")
         st.stop()
 
-    # Construction du graphe NetworkX
+    # Construction du graphe orienté
+    import networkx as nx
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import tempfile
+    from pyvis.network import Network
+    import streamlit.components.v1 as components
+
     G = nx.DiGraph()
     for _, row in df.iterrows():
         cve = row["cve"]
@@ -591,10 +588,10 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         try:
             pos = nx.spring_layout(G, seed=42)
 
-            # Ne garder que les nœuds avec positions finies
+            # Ne garder que les nœuds avec positions valides (finies)
             valid_nodes = [n for n in G.nodes if n in pos and all(np.isfinite(pos[n]))]
             G_valid = G.subgraph(valid_nodes)
-            pos_valid = {n: pos[n] for n in G_valid.nodes()}
+            pos_valid = {n: pos[n] for n in valid_nodes}
 
             plt.figure(figsize=(12, 8))
             nx.draw(G_valid, pos_valid, with_labels=True,
@@ -604,7 +601,7 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
             plt.clf()
 
         except Exception as e:
-            st.error(f"Erreur matplotlib : {e}")
+            st.error(f"Erreur matplotlib lors du dessin : {e}")
             st.info("Affichage alternatif via PyVis")
 
             net = Network(height="600px", width="100%", directed=True)
