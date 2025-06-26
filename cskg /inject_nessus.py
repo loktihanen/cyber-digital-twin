@@ -10,7 +10,7 @@ NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "password")
 graph = Graph(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 # ======================== 3. CHARGEMENT CSV NESSUS ========================
-NESSUS_CSV_PATH = "data/nessus_sample.csv"
+NESSUS_CSV_PATH = "data/nessuss-scan1.csv"
 
 def load_nessus_data(path):
     df = pd.read_csv(path)
