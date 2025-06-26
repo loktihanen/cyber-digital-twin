@@ -1,93 +1,43 @@
-name: 📦 Run Cyber Digital Twin Pipeline
+name: Run Cyber Digital Twin Pipeline
 
 on:
-  schedule:
-    - cron: '0 4 * * *'  # Tous les jours à 4h UTC
-  workflow_dispatch:       # Lancement manuel
   push:
     branches: [ main ]
-    paths:
-      - 'cskg/**'
-      - 'digital_twin/**'
-      - '.github/workflows/run_pipeline.yml'
+  workflow_dispatch:
 
 jobs:
   build:
-    name: ⚙️ Pipeline Digital Twin Complet
     runs-on: ubuntu-latest
-
     steps:
-      - name: ⬇️ Checkout code
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: 🧱 Installer dépendances système (GraphViz etc.)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libcairo2-dev \
-            libpango1.0-dev \
-            libgdk-pixbuf2.0-dev \
-            libffi-dev \
-            graphviz \
-            build-essential
-
-      - name: 🐍 Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      - name: 📦 Installer les dépendances Python
+      - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: ⚙️ Exécuter KG1 (NVD)
-        run: |
-          cd $GITHUB_WORKSPACE
-          python cskg/collect_nvd.py
+      - name: Run KG1 (NVD)
+        run: python cskg/collect_nvd.py   # ✅ Corrigé
 
-      - name: ⚙️ Exécuter KG2 (Nessus)
-        run: |
-          cd $GITHUB_WORKSPACE
-          python cskg/inject_nessus.py
+      - name: Run KG2 (Nessus)
+        run: python cskg/inject_nessus.py
 
-      - name: 🔄 Alignement & Fusion
+      - name: Run Alignment & Fusion
         run: |
-          cd $GITHUB_WORKSPACE
           python cskg/align_and_merge.py
           python cskg/propagate_impacts.py
 
-      - name: 🧠 Embeddings & GNN
-        run: |
-          cd $GITHUB_WORKSPACE
-          python cskg/embeddings_train.py
-          python cskg/r_gcn_predict.py
+      - name: Train Embeddings
+        run: python cskg/embeddings_train.py
 
-      - name: 📊 Générer visualisations
-        run: |
-          cd $GITHUB_WORKSPACE
-          python cskg/visualization.py
+      - name: Run R-GCN Prediction
+        run: python cskg/r_gcn_predict.py
 
-  monitor-nvd:
-    name: 🔁 Monitoring NVD (Nouveaux CVE)
-    runs-on: ubuntu-latest
-    needs: build  # Exécuter après le job principal
+      - name: Generate Visualizations
+        run: python cskg/visualization.py
 
-    steps:
-      - name: ⬇️ Checkout code
-        uses: actions/checkout@v3
-
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: 📦 Installer les dépendances Python
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: 🔍 Lancer le script de monitoring
-        run: |
-          cd $GITHUB_WORKSPACE
-          python digital_twin/monitor.py
