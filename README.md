@@ -1,4 +1,4 @@
-# cyber-digital-twin
+# cyberSecurity-digital-twin
 # 🛡️ Cyber Digital Twin for Vulnerability Management
 
 Ce projet implémente un jumeau numérique en cybersécurité basé sur un Knowledge Graph fusionné des vulnérabilités (NVD) et des données d’audit réseau (Nessus).
