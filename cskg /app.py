@@ -528,18 +528,33 @@ elif menu_choice == "🔀 CSKG3 – Fusion NVD + Nessus":
    # plt.gca().invert_yaxis()
    # st.pyplot(plt.gcf())
 elif menu_choice == "🧪 Simulation & Digital Twin":
-    st.header("🧪 Simulation avec le Jumeau Numérique")
-    st.info("Ce module permet de simuler des scénarios cyber en partant d'une CVE, avec propagation sur les plugins, hôtes, et services affectés.")
-
+    import streamlit as st
     import pandas as pd
     import numpy as np
     import networkx as nx
     import matplotlib.pyplot as plt
-    import matplotlib.animation as animation
     import tempfile
-    import streamlit.components.v1 as components
     from pyvis.network import Network
+    import streamlit.components.v1 as components
 
+    st.header("🧪 Simulation avec le Jumeau Numérique")
+    st.info("Ce module permet de simuler des scénarios cyber à l'aide du graphe fusionné enrichi CVE_UNIFIED et des hôtes réels.")
+
+    # Connexion à Neo4j
+    @st.cache_resource
+    def connect_neo4j():
+        from py2neo import Graph
+        uri = "neo4j+s://8d5fbce8.databases.neo4j.io"
+        user = "neo4j"
+        password = "VpzGP3RDVB7AtQ1vfrQljYUgxw4VBzy0tUItWeRB9CM"
+        graph = Graph(uri, auth=(user, password))
+        graph.run("RETURN 1").evaluate()
+        st.success("✅ Connexion Neo4j Aura réussie")
+        return graph
+
+    graph_db = connect_neo4j()
+
+    # Chargement des données multi-niveaux
     @st.cache_data
     def load_multilevel_graph():
         query = """
@@ -551,9 +566,10 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
     df = load_multilevel_graph()
 
     if df.empty:
-        st.warning("❌ Aucune donnée de propagation multi-niveaux trouvée. Lance d'abord les étapes d'enrichissement.")
+        st.warning("❌ Aucune donnée de propagation multi-niveaux trouvée.")
         st.stop()
 
+    # Construction du graphe NetworkX
     G = nx.DiGraph()
     for _, row in df.iterrows():
         cve = row["cve"]
@@ -575,15 +591,18 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
         try:
             pos = nx.spring_layout(G, seed=42)
 
-            # ✅ Patch : suppression des positions invalides
-            valid_nodes = [n for n in G.nodes if n in pos and all(map(np.isfinite, pos[n]))]
+            # Ne garder que les nœuds avec positions finies
+            valid_nodes = [n for n in G.nodes if n in pos and all(np.isfinite(pos[n]))]
             G_valid = G.subgraph(valid_nodes)
+            pos_valid = {n: pos[n] for n in G_valid.nodes()}
 
             plt.figure(figsize=(12, 8))
-            nx.draw(G_valid, pos, with_labels=True, node_color='lightblue', edge_color='gray',
-                    node_size=800, font_size=8, arrowsize=15)
+            nx.draw(G_valid, pos_valid, with_labels=True,
+                    node_color='lightblue', edge_color='gray',
+                    node_size=1500, font_size=9, arrows=True)
             st.pyplot(plt.gcf())
             plt.clf()
+
         except Exception as e:
             st.error(f"Erreur matplotlib : {e}")
             st.info("Affichage alternatif via PyVis")
@@ -591,8 +610,9 @@ elif menu_choice == "🧪 Simulation & Digital Twin":
             net = Network(height="600px", width="100%", directed=True)
             for node in G.nodes():
                 net.add_node(node, label=node)
-            for source, target, data in G.edges(data=True):
-                net.add_edge(source, target, value=data.get("weight", 1.0))
+            for src, tgt, data in G.edges(data=True):
+                net.add_edge(src, tgt, value=data.get("weight", 1.0))
+
             tmp_path = tempfile.NamedTemporaryFile(suffix=".html", delete=False).name
             net.show(tmp_path)
             with open(tmp_path, 'r', encoding='utf-8') as f:
